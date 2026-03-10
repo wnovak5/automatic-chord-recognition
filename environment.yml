@@ -1,0 +1,20 @@
+name: chord_recognition
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+  - pip
+  - ipykernel
+  - numpy
+  - pandas
+  - scipy
+  - librosa
+  - pytorch
+  - torchvision
+  - torchaudio
+  - tensorflow
+  - pip:
+      - liac-arff
