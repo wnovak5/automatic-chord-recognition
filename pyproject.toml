@@ -10,5 +10,7 @@ dependencies = [
     "matplotlib",
     "numpy",
     "pandas",
-    "liac-arff"
+    "liac-arff",
+    "ipykernel",
+    "jupyter"
 ]
