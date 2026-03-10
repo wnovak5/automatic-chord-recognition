@@ -1,0 +1,14 @@
+[project]
+name = "automatic-chord-recognition"
+version = "0.1.0"
+description = "Chord recognition project using the AAM dataset"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "librosa",
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "liac-arff"
+]
