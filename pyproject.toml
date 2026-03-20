@@ -12,5 +12,7 @@ dependencies = [
     "pandas",
     "liac-arff",
     "ipykernel",
-    "jupyter"
+    "jupyter",
+    "torch>=2.10.0",
+    "scikit-learn>=1.7.2",
 ]
