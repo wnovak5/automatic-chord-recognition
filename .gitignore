@@ -1,5 +1,7 @@
 # Virtual environments
 .venv/
+__pycache__/
+*.pyc
 
 # Data
 /data/
