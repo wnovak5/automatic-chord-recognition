@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import csv
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -12,6 +13,8 @@ import pandas as pd
 
 
 DEFAULT_AAM_ROOT = Path("data/raw/tinyAAM")
+FULL_AAM_ROOT = Path("data/raw/AAM")
+AAM_ROOT_ENV_VAR = "AAM_ROOT"
 
 
 @dataclass(frozen=True)
@@ -39,13 +42,24 @@ class AAMTrackData:
 
 
 def _resolve_root(root: str | Path | None = None) -> Path:
-    """Use the caller-provided dataset root or fall back to tinyAAM."""
+    """Resolve the dataset root from an explicit path, env var, or local defaults."""
 
-    dataset_root = Path(root) if root is not None else DEFAULT_AAM_ROOT
-    dataset_root = dataset_root.expanduser()
-    if not dataset_root.exists():
-        raise FileNotFoundError(f"AAM dataset root does not exist: {dataset_root}")
-    return dataset_root
+    candidate_roots: list[Path] = []
+    if root is not None:
+        candidate_roots.append(Path(root))
+    else:
+        env_root = os.environ.get(AAM_ROOT_ENV_VAR)
+        if env_root:
+            candidate_roots.append(Path(env_root))
+        candidate_roots.extend([FULL_AAM_ROOT, DEFAULT_AAM_ROOT])
+
+    for candidate in candidate_roots:
+        dataset_root = candidate.expanduser()
+        if dataset_root.exists():
+            return dataset_root
+
+    searched = ", ".join(str(path.expanduser()) for path in candidate_roots)
+    raise FileNotFoundError(f"AAM dataset root does not exist. Searched: {searched}")
 
 
 def _require_file(path: Path) -> Path:
@@ -164,7 +178,7 @@ def _prepare_annotation_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 
 class AAMDataset:
-    """Convenience wrapper around the tinyAAM directory layout."""
+    """Convenience wrapper around the AAM directory layout."""
 
     def __init__(self, root: str | Path | None = None) -> None:
         self.root = _resolve_root(root)
