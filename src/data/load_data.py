@@ -15,6 +15,7 @@ import pandas as pd
 DEFAULT_AAM_ROOT = Path("data/raw/tinyAAM")
 FULL_AAM_ROOT = Path("data/raw/AAM")
 AAM_ROOT_ENV_VAR = "AAM_ROOT"
+NO_CHORD_LABEL = "N.C."
 
 
 @dataclass(frozen=True)
@@ -151,9 +152,26 @@ def _normalize_chord_name(chord: str | None) -> str:
     """Map empty or missing chord labels to a neutral no-chord token."""
 
     if chord is None:
-        return "N"
+        return NO_CHORD_LABEL
     chord_name = str(chord).strip().strip("'").strip('"')
-    return chord_name if chord_name else "N"
+    if not chord_name:
+        return NO_CHORD_LABEL
+    if chord_name.upper() in {"N", "N.C.", "NO_CHORD"}:
+        return NO_CHORD_LABEL
+    return chord_name
+
+
+def _find_mix_audio_path(mix_dir: Path, track_id: str) -> Path:
+    """Locate one track's rendered mix regardless of the encoded audio extension."""
+
+    for suffix in (".mp3", ".flac", ".wav"):
+        candidate = mix_dir / f"{track_id}_mix{suffix}"
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(
+        f"Required mix audio is missing for track {track_id} under {mix_dir}. "
+        "Expected one of: *_mix.mp3, *_mix.flac, *_mix.wav"
+    )
 
 
 def _prepare_annotation_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -195,7 +213,12 @@ class AAMDataset:
     def track_ids(self) -> list[str]:
         """List all track ids that have a mix file available."""
 
-        return sorted(path.name.split("_")[0] for path in self.mix_dir.glob("*_mix.mp3"))
+        mix_paths = [
+            *self.mix_dir.glob("*_mix.mp3"),
+            *self.mix_dir.glob("*_mix.flac"),
+            *self.mix_dir.glob("*_mix.wav"),
+        ]
+        return sorted({path.name.split("_")[0] for path in mix_paths})
 
     def _paths_for_track(self, track_id: str) -> AAMTrackPaths:
         """Build the expected file paths for one track id."""
@@ -203,7 +226,7 @@ class AAMDataset:
         stem_paths = sorted(self.stem_dir.glob(f"{track_id}_*.mp3")) if self.stem_dir is not None else []
         return AAMTrackPaths(
             track_id=track_id,
-            mix_audio=_require_file(self.mix_dir / f"{track_id}_mix.mp3"),
+            mix_audio=_find_mix_audio_path(self.mix_dir, track_id),
             stems=stem_paths,
             beatinfo=_require_file(self.annotation_dir / f"{track_id}_beatinfo.arff"),
             onsets=_optional_file(self.annotation_dir / f"{track_id}_onsets.arff"),
@@ -367,7 +390,7 @@ def frame_times(
 def frame_labels_from_intervals(
     intervals: pd.DataFrame,
     times: np.ndarray,
-    default_label: str = "N",
+    default_label: str = NO_CHORD_LABEL,
 ) -> np.ndarray:
     """
     Assign a chord label to each feature frame timestamp.

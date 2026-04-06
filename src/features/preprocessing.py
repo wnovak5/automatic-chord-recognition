@@ -16,7 +16,7 @@ from src.data import (
 )
 
 
-NO_CHORD_LABEL = "N"
+NO_CHORD_LABEL = "N.C."
 
 # Restricting the first-pass label space to major/minor/no-chord keeps the
 # classification problem manageable while the end-to-end pipeline is still being built.
@@ -77,14 +77,14 @@ def simplify_chord_label(chord_label: str | None, no_chord_label: str = NO_CHORD
     - `Fmaj` -> `F:maj`
     - `Dmin` -> `D:min`
     - `Bb:maj7` -> `A#:maj`
-    - empty labels -> `N`
+    - empty labels -> `N.C.`
     """
 
     if chord_label is None:
         return no_chord_label
 
     chord = str(chord_label).strip().strip("'").strip('"')
-    if not chord or chord.upper() in {"N", "NO_CHORD"}:
+    if not chord or chord.upper() in {"N", "N.C.", "NO_CHORD"}:
         return no_chord_label
 
     if ":" in chord:

@@ -43,12 +43,14 @@ class ChordVocab:
 
 
 def build_vocab_from_dataset(root: str | Path | None = None) -> list[str]:
-    """Scan all tracks and return the sorted unique chord labels found."""
-    from src.data.load_data import AAMDataset, load_training_example
+    """Scan beat annotations and return the sorted unique chord labels found."""
+    from src.data.load_data import AAMDataset
 
     dataset = AAMDataset(root)
     all_labels: set[str] = set()
     for track_id in dataset.track_ids():
-        example = load_training_example(track_id, root=root)
-        all_labels.update(example["frame_labels"])
+        beatinfo = dataset.load_annotations(track_id)["beatinfo"]
+        if "Chord name" not in beatinfo.columns:
+            raise ValueError(f"beatinfo for track {track_id} is missing the 'Chord name' column")
+        all_labels.update(str(label) for label in beatinfo["Chord name"].dropna().unique())
     return sorted(all_labels)
