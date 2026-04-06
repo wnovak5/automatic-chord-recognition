@@ -46,12 +46,14 @@ ARCHIVES: tuple[ArchiveSpec, ...] = (
     ArchiveSpec("info.zip", "15b395250d43a11e899908319e750b2f", "info"),
 )
 
+REQUIRED_CATEGORIES = {"annotations", "audio-mixes-mp3"}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Download the full AAM dataset from Zenodo and extract it into the "
-            "directory layout expected by this repository."
+            "Download the AAM dataset subset needed by this repository. "
+            "By default this fetches annotations plus mixed audio only."
         )
     )
     parser.add_argument(
@@ -86,12 +88,47 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip MD5 verification for local archives.",
     )
+    parser.add_argument(
+        "--include-multitracks",
+        action="store_true",
+        help="Also download the optional multitrack stem archives.",
+    )
+    parser.add_argument(
+        "--include-midis",
+        action="store_true",
+        help="Also download the optional MIDI archives.",
+    )
+    parser.add_argument(
+        "--include-info",
+        action="store_true",
+        help="Also download the optional info archive.",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Download every archive in the Zenodo record.",
+    )
     args = parser.parse_args()
 
     if args.download_only and args.extract_only:
         parser.error("--download-only and --extract-only cannot be used together")
 
     return args
+
+
+def selected_archives(args: argparse.Namespace) -> tuple[ArchiveSpec, ...]:
+    if args.full:
+        return ARCHIVES
+
+    selected_categories = set(REQUIRED_CATEGORIES)
+    if args.include_multitracks:
+        selected_categories.add("audio-multitracks-mp3")
+    if args.include_midis:
+        selected_categories.add("midis")
+    if args.include_info:
+        selected_categories.add("info")
+
+    return tuple(spec for spec in ARCHIVES if spec.category in selected_categories)
 
 
 def compute_md5(path: Path) -> str:
@@ -227,6 +264,7 @@ def verify_archive(spec: ArchiveSpec, archive_path: Path, skip_md5: bool) -> Non
 
 def main() -> int:
     args = parse_args()
+    archives = selected_archives(args)
     root = args.root.expanduser().resolve()
     archives_dir = (
         args.archives_dir.expanduser().resolve()
@@ -237,11 +275,12 @@ def main() -> int:
     print(f"Zenodo record: {RECORD_URL}")
     print(f"Dataset root: {root}")
     print(f"Archive cache: {archives_dir}")
+    print(f"Selected archive categories: {', '.join(sorted({spec.category for spec in archives}))}")
 
     if not args.extract_only:
         archives_dir.mkdir(parents=True, exist_ok=True)
 
-    for spec in ARCHIVES:
+    for spec in archives:
         archive_path = archives_dir / spec.filename
 
         if not args.extract_only:
@@ -278,8 +317,23 @@ def main() -> int:
         print(f"{spec.filename}: extracted {extracted} files, skipped {skipped}")
 
     if not args.download_only and not args.keep_archives and archives_dir.exists():
-        shutil.rmtree(archives_dir)
-        print(f"Removed archive cache {archives_dir}")
+        if args.archives_dir is None:
+            shutil.rmtree(archives_dir)
+            print(f"Removed archive cache {archives_dir}")
+        else:
+            removed = 0
+            for spec in archives:
+                archive_path = archives_dir / spec.filename
+                if archive_path.exists():
+                    archive_path.unlink()
+                    removed += 1
+            if removed:
+                print(f"Removed {removed} extracted archive(s) from {archives_dir}")
+            try:
+                archives_dir.rmdir()
+                print(f"Removed empty archive cache {archives_dir}")
+            except OSError:
+                pass
 
     print("AAM dataset is ready.")
     print(f"Your existing loaders will now prefer {root} automatically when it exists.")

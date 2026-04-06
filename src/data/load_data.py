@@ -25,8 +25,8 @@ class AAMTrackPaths:
     mix_audio: Path
     stems: list[Path]
     beatinfo: Path
-    onsets: Path
-    segments: Path
+    onsets: Path | None
+    segments: Path | None
 
 
 @dataclass(frozen=True)
@@ -37,8 +37,8 @@ class AAMTrackData:
     audio: np.ndarray
     sample_rate: int
     beatinfo: pd.DataFrame
-    onsets: pd.DataFrame
-    segments: pd.DataFrame
+    onsets: pd.DataFrame | None
+    segments: pd.DataFrame | None
 
 
 def _resolve_root(root: str | Path | None = None) -> Path:
@@ -68,6 +68,12 @@ def _require_file(path: Path) -> Path:
     if not path.exists():
         raise FileNotFoundError(f"Required dataset file is missing: {path}")
     return path
+
+
+def _optional_file(path: Path) -> Path | None:
+    """Return the path when it exists, otherwise signal that it is unavailable."""
+
+    return path if path.exists() else None
 
 
 def _decode_attribute_name(attribute: object) -> str:
@@ -184,7 +190,7 @@ class AAMDataset:
         self.root = _resolve_root(root)
         self.annotation_dir = _require_file(self.root / "annotations")
         self.mix_dir = _require_file(self.root / "audio-mixes-mp3")
-        self.stem_dir = _require_file(self.root / "audio-multitracks-mp3")
+        self.stem_dir = _optional_file(self.root / "audio-multitracks-mp3")
 
     def track_ids(self) -> list[str]:
         """List all track ids that have a mix file available."""
@@ -194,14 +200,14 @@ class AAMDataset:
     def _paths_for_track(self, track_id: str) -> AAMTrackPaths:
         """Build the expected file paths for one track id."""
 
-        stem_paths = sorted(self.stem_dir.glob(f"{track_id}_*.mp3"))
+        stem_paths = sorted(self.stem_dir.glob(f"{track_id}_*.mp3")) if self.stem_dir is not None else []
         return AAMTrackPaths(
             track_id=track_id,
             mix_audio=_require_file(self.mix_dir / f"{track_id}_mix.mp3"),
             stems=stem_paths,
             beatinfo=_require_file(self.annotation_dir / f"{track_id}_beatinfo.arff"),
-            onsets=_require_file(self.annotation_dir / f"{track_id}_onsets.arff"),
-            segments=_require_file(self.annotation_dir / f"{track_id}_segments.arff"),
+            onsets=_optional_file(self.annotation_dir / f"{track_id}_onsets.arff"),
+            segments=_optional_file(self.annotation_dir / f"{track_id}_segments.arff"),
         )
 
     def list_tracks(self) -> pd.DataFrame:
@@ -216,20 +222,28 @@ class AAMDataset:
                     "mix_audio": str(paths.mix_audio),
                     "num_stems": len(paths.stems),
                     "beatinfo": str(paths.beatinfo),
-                    "onsets": str(paths.onsets),
-                    "segments": str(paths.segments),
+                    "onsets": str(paths.onsets) if paths.onsets is not None else None,
+                    "segments": str(paths.segments) if paths.segments is not None else None,
                 }
             )
         return pd.DataFrame(rows)
 
-    def load_annotations(self, track_id: str) -> dict[str, pd.DataFrame]:
+    def load_annotations(self, track_id: str) -> dict[str, pd.DataFrame | None]:
         """Load beat, onset, and segment annotations for a track."""
 
         paths = self._paths_for_track(track_id)
         return {
             "beatinfo": _prepare_annotation_frame(load_arff_table(paths.beatinfo)),
-            "onsets": _prepare_annotation_frame(load_arff_table(paths.onsets)),
-            "segments": _prepare_annotation_frame(load_arff_table(paths.segments)),
+            "onsets": (
+                _prepare_annotation_frame(load_arff_table(paths.onsets))
+                if paths.onsets is not None
+                else None
+            ),
+            "segments": (
+                _prepare_annotation_frame(load_arff_table(paths.segments))
+                if paths.segments is not None
+                else None
+            ),
         }
 
     def load_audio(
@@ -250,6 +264,14 @@ class AAMDataset:
         if source == "mix":
             audio, sample_rate = librosa.load(paths.mix_audio, sr=sr, mono=mono)
             return audio, sample_rate
+
+        if self.stem_dir is None:
+            raise FileNotFoundError(
+                f"AAM stems directory is missing under {self.root}. "
+                "Install the optional multitrack archives to load stems."
+            )
+        if not paths.stems:
+            raise FileNotFoundError(f"No stems found for track {track_id} under {self.stem_dir}")
 
         stem_audio: list[tuple[str, np.ndarray, int]] = []
         for stem_path in paths.stems:
