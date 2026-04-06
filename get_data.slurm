@@ -2,7 +2,7 @@
 #SBATCH --job-name=get-aam-data
 #SBATCH --output=slurm-get-data-%j.out
 #SBATCH --error=slurm-get-data-%j.err
-#SBATCH --time=48:00:00
+#SBATCH --time=08:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=8G
