@@ -10,24 +10,23 @@
 
 set -euo pipefail
 
+module load miniforge/24.11.3-py3.12
+export PATH="$HOME/.local/bin:$PATH"
+
 REPO_ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")" && pwd)}"
 cd "$REPO_ROOT"
 
 echo "Job started at: $(date)"
 echo "Running from: $REPO_ROOT"
 echo "Host: $(hostname)"
+echo "Python: $(which python)"
+echo "Python version: $(python --version)"
+echo "uv: $(which uv)"
 
-if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
-  PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
-else
-  PYTHON_BIN="$(command -v python3)"
-fi
+# Build/update the env from pyproject.toml + uv.lock
+uv sync
 
-echo "Using Python: $PYTHON_BIN"
-
-# Default behavior downloads only the training-required AAM subset:
-# annotations + audio mixes. Archives are kept so interrupted downloads can
-# resume cleanly on a later run.
-"$PYTHON_BIN" get_data.py --keep-archives "$@"
+# Run inside the uv-managed environment
+uv run python get_data.py --keep-archives
 
 echo "Job finished at: $(date)"
