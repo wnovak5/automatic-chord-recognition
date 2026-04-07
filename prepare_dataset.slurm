@@ -2,6 +2,7 @@
 #SBATCH --job-name=acr-prepare-data
 #SBATCH --output=slurm-prepare-data-%j.out
 #SBATCH --error=slurm-prepare-data-%j.err
+#SBATCH --partition=standard
 #SBATCH --time=08:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
