@@ -304,6 +304,23 @@ Postprocessing controls:
 
 For now, the most practical output is `chord_segments.csv`. This model predicts only the current 25-class vocabulary of major, minor, and `N.C.` labels.
 
+## Desktop App
+
+There is also a simple local GUI for teammates who do not want to use the command line:
+
+```bash
+.venv/bin/python app.py
+```
+
+The desktop app:
+
+- lets the user choose an audio file from disk
+- runs the same pretrained inference pipeline used by `infer.py`
+- displays the merged chord timeline on screen
+- saves the CSV outputs under the default `inference/<audio-stem>/` folder
+
+This first version is a local `tkinter` desktop app, so it should be run on a machine with a graphical desktop session. It is intended as a simple front end for iteration, not a production deployment target.
+
 ## Notes
 
 - The model vocabulary is a 25-class major/minor/no-chord label space

@@ -304,40 +304,50 @@ def save_metadata(
     (output_dir / "metadata.json").write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def main() -> int:
-    args = parse_args()
-    audio_path = args.audio.expanduser().resolve()
-    checkpoint_path = args.checkpoint.expanduser().resolve()
-    output_dir = args.output_dir.expanduser().resolve() if args.output_dir is not None else default_output_dir(audio_path)
-    output_dir.mkdir(parents=True, exist_ok=True)
+def run_inference(
+    *,
+    audio_path: Path,
+    checkpoint_path: Path = DEFAULT_CHECKPOINT,
+    output_dir: Path | None = None,
+    device_name: str = "auto",
+    sample_rate: int = DEFAULT_SAMPLE_RATE,
+    hop_length: int = DEFAULT_HOP_LENGTH,
+    context: int = DEFAULT_CONTEXT,
+    smoothing_window: int = DEFAULT_SMOOTHING_WINDOW,
+    min_segment_seconds: float = DEFAULT_MIN_SEGMENT_SECONDS,
+) -> dict[str, Any]:
+    audio_path = audio_path.expanduser().resolve()
+    checkpoint_path = checkpoint_path.expanduser().resolve()
+    resolved_output_dir = output_dir.expanduser().resolve() if output_dir is not None else default_output_dir(audio_path)
+    resolved_output_dir.mkdir(parents=True, exist_ok=True)
 
     checkpoint = load_checkpoint(checkpoint_path)
-    device = resolve_device(args.device)
+    device = resolve_device(device_name)
     model = build_model(checkpoint, device)
     vocab = build_vocab(checkpoint)
 
     expected_input_dim = int(checkpoint["model_kwargs"]["input_dim"])
-    actual_input_dim = 12 * (2 * args.context + 1)
+    actual_input_dim = 12 * (2 * context + 1)
     if actual_input_dim != expected_input_dim:
         raise ValueError(
-            f"Configured context={args.context} produces input_dim={actual_input_dim}, "
+            f"Configured context={context} produces input_dim={actual_input_dim}, "
             f"but checkpoint expects input_dim={expected_input_dim}."
         )
 
-    audio = load_audio(audio_path, sample_rate=args.sample_rate)
-    audio_duration_seconds = len(audio) / args.sample_rate
+    audio = load_audio(audio_path, sample_rate=sample_rate)
+    audio_duration_seconds = len(audio) / sample_rate
     frame_times_seconds, labels = predict_labels(
         model,
         vocab,
         audio,
-        sample_rate=args.sample_rate,
-        hop_length=args.hop_length,
-        context=args.context,
+        sample_rate=sample_rate,
+        hop_length=hop_length,
+        context=context,
         device=device,
     )
 
     raw_label_idx = vocab.encode(labels)
-    smoothed_label_idx = smooth_label_indices(raw_label_idx, num_classes=len(vocab), window_size=args.smoothing_window)
+    smoothed_label_idx = smooth_label_indices(raw_label_idx, num_classes=len(vocab), window_size=smoothing_window)
     smoothed_labels = vocab.decode(smoothed_label_idx)
 
     raw_frame_df = frame_predictions_to_df(frame_times_seconds, labels, audio_duration_seconds=audio_duration_seconds)
@@ -346,32 +356,63 @@ def main() -> int:
     )
     segment_df = merge_short_segments(
         merge_consecutive_frames(frame_df),
-        min_segment_seconds=args.min_segment_seconds,
+        min_segment_seconds=min_segment_seconds,
     )
 
-    raw_frame_df.to_csv(output_dir / "raw_frame_predictions.csv", index=False)
-    frame_df.to_csv(output_dir / "frame_predictions.csv", index=False)
-    segment_df.to_csv(output_dir / "chord_segments.csv", index=False)
+    raw_frame_path = resolved_output_dir / "raw_frame_predictions.csv"
+    frame_path = resolved_output_dir / "frame_predictions.csv"
+    segment_path = resolved_output_dir / "chord_segments.csv"
+
+    raw_frame_df.to_csv(raw_frame_path, index=False)
+    frame_df.to_csv(frame_path, index=False)
+    segment_df.to_csv(segment_path, index=False)
     save_metadata(
-        output_dir,
+        resolved_output_dir,
         audio_path=audio_path,
         checkpoint_path=checkpoint_path,
         device=device,
+        sample_rate=sample_rate,
+        hop_length=hop_length,
+        context=context,
+        smoothing_window=smoothing_window,
+        min_segment_seconds=min_segment_seconds,
+        num_frames=len(frame_df),
+        num_segments=len(segment_df),
+    )
+
+    return {
+        "audio_path": audio_path,
+        "checkpoint_path": checkpoint_path,
+        "device": str(device),
+        "output_dir": resolved_output_dir,
+        "raw_frame_df": raw_frame_df,
+        "frame_df": frame_df,
+        "segment_df": segment_df,
+        "raw_frame_path": raw_frame_path,
+        "frame_path": frame_path,
+        "segment_path": segment_path,
+    }
+
+
+def main() -> int:
+    args = parse_args()
+    result = run_inference(
+        audio_path=args.audio,
+        checkpoint_path=args.checkpoint,
+        output_dir=args.output_dir,
+        device_name=args.device,
         sample_rate=args.sample_rate,
         hop_length=args.hop_length,
         context=args.context,
         smoothing_window=args.smoothing_window,
         min_segment_seconds=args.min_segment_seconds,
-        num_frames=len(frame_df),
-        num_segments=len(segment_df),
     )
-
-    print(f"Audio: {audio_path}")
-    print(f"Checkpoint: {checkpoint_path}")
-    print(f"Device: {device}")
-    print(f"Saved raw frame predictions to {output_dir / 'raw_frame_predictions.csv'}")
-    print(f"Saved frame predictions to {output_dir / 'frame_predictions.csv'}")
-    print(f"Saved merged chord segments to {output_dir / 'chord_segments.csv'}")
+    print(f"Audio: {result['audio_path']}")
+    print(f"Checkpoint: {result['checkpoint_path']}")
+    print(f"Device: {result['device']}")
+    print(f"Saved raw frame predictions to {result['raw_frame_path']}")
+    print(f"Saved frame predictions to {result['frame_path']}")
+    print(f"Saved merged chord segments to {result['segment_path']}")
     return 0
 
 
