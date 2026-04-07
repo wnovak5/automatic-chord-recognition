@@ -3,7 +3,7 @@
 #SBATCH --output=slurm-train-lstm-%j.out
 #SBATCH --error=slurm-train-lstm-%j.err
 #SBATCH --partition=gpu
-#SBATCH --time=08:00:00
+#SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
