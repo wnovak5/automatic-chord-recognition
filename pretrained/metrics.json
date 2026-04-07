@@ -1,0 +1,13 @@
+{
+  "best_epoch": 15,
+  "cache_dir": "/sfs/gpfs/tardis/home/eca4zm/automatic-chord-recognition/data/processed/aam_lstm_cache",
+  "checkpoint": "/sfs/gpfs/tardis/home/eca4zm/automatic-chord-recognition/runs/lstm-11278663/best_lstm_checkpoint.pt",
+  "device": "cuda",
+  "prediction_track": "0002",
+  "test_frame_accuracy": 0.9556492024042743,
+  "test_sequence_accuracy": 0.9243065235451334,
+  "test_sequence_loss": 0.25113017574445706,
+  "test_tracks": 300,
+  "train_tracks": 2400,
+  "val_tracks": 300
+}
