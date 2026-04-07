@@ -7,7 +7,7 @@ This repository trains a chord-recognition model on the AAM dataset. The current
 1. download the raw AAM data
 2. preprocess it into a cached feature dataset
 3. train an LSTM from that cache
-4. save a checkpoint and evaluation artifacts for local use later
+4. save a checkpoint and evaluation artifacts for local use or repository distribution later
 
 ## Pipeline
 
@@ -22,6 +22,7 @@ More concretely:
 3. `prepare_dataset.py` loads each track, resamples it to mono `22050 Hz`, computes chroma, aligns labels to frames, and saves one cached file per song
 4. `train.py` trains a `ChordLSTM` from those cached files through a lazy dataset loader
 5. The best checkpoint and evaluation outputs are written to a run directory under `runs/`
+6. The committed inference artifact for teammates lives under `pretrained/`
 
 ## What Data Is Actually Needed
 
@@ -224,7 +225,7 @@ The checkpoint includes:
 - test metrics
 - cache metadata
 
-This checkpoint is the artifact you copy back to your local machine for inference.
+The selected inference artifact for this repository is committed at `pretrained/best_lstm_checkpoint.pt`.
 
 ## Progress Logging
 
@@ -255,15 +256,15 @@ tail -f slurm-train-lstm-<jobid>.out
 The intended deployment path is:
 
 1. train on Rivanna
-2. copy `best_lstm_checkpoint.pt` to your local machine
+2. promote the selected checkpoint into `pretrained/`
 3. rebuild the `ChordLSTM` from the saved metadata
 4. load `model_state_dict`
 5. run inference on new songs
 
-The checkpoint should not be committed to the repository.
+Teammates should use `pretrained/best_lstm_checkpoint.pt` for shared inference instead of retraining the model.
 
 ## Notes
 
 - The model vocabulary is a 25-class major/minor/no-chord label space
 - Unsupported raw annotation exceptions are normalized to `N.C.`
-- Generated outputs such as `runs/`, caches, checkpoints, and SLURM logs should stay out of git history
+- Generated outputs such as ad hoc `runs/`, caches, and SLURM logs should stay out of git history; `pretrained/` is the intentional exception for the shared inference checkpoint
