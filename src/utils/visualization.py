@@ -87,12 +87,20 @@ def plot_confusion_matrix(
     ax: plt.Axes | None = None,
 ) -> plt.Axes:
     """Heatmap of a confusion matrix DataFrame."""
-    import seaborn as sns
-
     if ax is None:
         _, ax = plt.subplots(figsize=(14, 12))
 
-    sns.heatmap(cm_df, ax=ax, fmt="d", cmap="Blues", linewidths=0.5)
+    try:
+        import seaborn as sns
+
+        sns.heatmap(cm_df, ax=ax, fmt="d", cmap="Blues", linewidths=0.5)
+    except ModuleNotFoundError:
+        image = ax.imshow(cm_df.to_numpy(), cmap="Blues", aspect="auto")
+        ax.set_xticks(range(len(cm_df.columns)))
+        ax.set_xticklabels(cm_df.columns, rotation=90)
+        ax.set_yticks(range(len(cm_df.index)))
+        ax.set_yticklabels(cm_df.index)
+        plt.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
     ax.set_title("Confusion Matrix")
     ax.set_xlabel("Predicted")
     ax.set_ylabel("True")

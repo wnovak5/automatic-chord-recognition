@@ -8,6 +8,7 @@ requires-python = ">=3.10"
 dependencies = [
     "librosa",
     "matplotlib",
+    "seaborn",
     "numpy",
     "pandas",
     "liac-arff",
