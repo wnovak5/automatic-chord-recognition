@@ -263,8 +263,49 @@ The intended deployment path is:
 
 Teammates should use `pretrained/best_lstm_checkpoint.pt` for shared inference instead of retraining the model.
 
+## Inference
+
+For local one-song-at-a-time inference, you can run the committed checkpoint directly on CPU:
+
+```bash
+.venv/bin/python infer.py --audio path/to/song.mp3 --device cpu
+```
+
+Supported inputs depend on `librosa`/backend support and typically include formats such as `.mp3`, `.wav`, and `.flac`.
+
+By default, `infer.py`:
+
+- loads audio as mono at `22050 Hz`
+- computes the same chroma features used during training
+- restores `ChordLSTM` from `pretrained/best_lstm_checkpoint.pt`
+- writes outputs under `inference/<audio-stem>/`
+
+Inference outputs:
+
+- `raw_frame_predictions.csv`: unsmoothed frame-by-frame chord labels
+- `frame_predictions.csv`: smoothed frame-by-frame chord labels
+- `chord_segments.csv`: merged chord spans intended to be easier to play from
+- `metadata.json`: checkpoint path and inference settings used
+
+Useful options:
+
+```bash
+.venv/bin/python infer.py \
+  --audio path/to/song.wav \
+  --output-dir inference/song_name \
+  --smoothing-window 9 \
+  --min-segment-seconds 0.35
+```
+
+Postprocessing controls:
+
+- `--smoothing-window`: odd-number majority-vote window over neighboring frames; larger values reduce flicker
+- `--min-segment-seconds`: merges very short chord segments into adjacent ones to produce a cleaner chord chart
+
+For now, the most practical output is `chord_segments.csv`. This model predicts only the current 25-class vocabulary of major, minor, and `N.C.` labels.
+
 ## Notes
 
 - The model vocabulary is a 25-class major/minor/no-chord label space
 - Unsupported raw annotation exceptions are normalized to `N.C.`
-- Generated outputs such as ad hoc `runs/`, caches, and SLURM logs should stay out of git history; `pretrained/` is the intentional exception for the shared inference checkpoint
+- Generated outputs such as ad hoc `runs/`, caches, `tmp/`, inference outputs, and SLURM logs should stay out of git history; `pretrained/` is the intentional exception for the shared inference checkpoint
