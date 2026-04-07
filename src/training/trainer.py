@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
+import time
 from typing import Any
 
 import torch
@@ -144,13 +145,17 @@ def train_sequence_epoch(
     criterion: nn.Module,
     device: torch.device,
     ignore_index: int = IGNORE_INDEX,
+    progress_interval: int | None = None,
+    progress_prefix: str = "train",
 ) -> dict[str, float]:
     model.train()
     total_loss = 0.0
     correct = 0
     total = 0
+    num_batches = len(loader)
+    started_at = time.time()
 
-    for x, y, lengths in loader:
+    for batch_index, (x, y, lengths) in enumerate(loader, start=1):
         x, y, lengths = x.to(device), y.to(device), lengths.to(device)
         optimizer.zero_grad()
         logits = model(x, lengths=lengths)
@@ -164,6 +169,20 @@ def train_sequence_epoch(
         correct += int(((preds == y) & valid_mask).sum().item())
         total += int(valid_mask.sum().item())
 
+        if progress_interval is not None and (
+            batch_index == 1 or batch_index % progress_interval == 0 or batch_index == num_batches
+        ):
+            elapsed = time.time() - started_at
+            avg_seconds = elapsed / batch_index
+            remaining = (num_batches - batch_index) * avg_seconds
+            running_loss = total_loss / max(total, 1)
+            running_acc = correct / max(total, 1)
+            print(
+                f"  [{progress_prefix}] batch {batch_index}/{num_batches} "
+                f"loss={running_loss:.4f} acc={running_acc:.3f} "
+                f"elapsed={elapsed/60:.1f}m eta={remaining/60:.1f}m"
+            )
+
     return {"loss": total_loss / total, "accuracy": correct / total}
 
 
@@ -173,14 +192,18 @@ def evaluate_sequence(
     criterion: nn.Module,
     device: torch.device,
     ignore_index: int = IGNORE_INDEX,
+    progress_interval: int | None = None,
+    progress_prefix: str = "val",
 ) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
     correct = 0
     total = 0
+    num_batches = len(loader)
+    started_at = time.time()
 
     with torch.no_grad():
-        for x, y, lengths in loader:
+        for batch_index, (x, y, lengths) in enumerate(loader, start=1):
             x, y, lengths = x.to(device), y.to(device), lengths.to(device)
             logits = model(x, lengths=lengths)
             loss = criterion(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
@@ -190,6 +213,20 @@ def evaluate_sequence(
             total_loss += loss.item() * int(valid_mask.sum().item())
             correct += int(((preds == y) & valid_mask).sum().item())
             total += int(valid_mask.sum().item())
+
+            if progress_interval is not None and (
+                batch_index == 1 or batch_index % progress_interval == 0 or batch_index == num_batches
+            ):
+                elapsed = time.time() - started_at
+                avg_seconds = elapsed / batch_index
+                remaining = (num_batches - batch_index) * avg_seconds
+                running_loss = total_loss / max(total, 1)
+                running_acc = correct / max(total, 1)
+                print(
+                    f"  [{progress_prefix}] batch {batch_index}/{num_batches} "
+                    f"loss={running_loss:.4f} acc={running_acc:.3f} "
+                    f"elapsed={elapsed/60:.1f}m eta={remaining/60:.1f}m"
+                )
 
     return {"loss": total_loss / total, "accuracy": correct / total}
 
@@ -203,6 +240,7 @@ def train_sequence(
     device: torch.device,
     patience: int = 10,
     ignore_index: int = IGNORE_INDEX,
+    progress_interval: int | None = None,
 ) -> dict[str, Any]:
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -225,8 +263,26 @@ def train_sequence(
     no_improve = 0
 
     for epoch in range(num_epochs):
-        tr = train_sequence_epoch(model, train_loader, optimizer, criterion, device, ignore_index=ignore_index)
-        va = evaluate_sequence(model, val_loader, criterion, device, ignore_index=ignore_index)
+        print(f"Epoch {epoch + 1}/{num_epochs}:")
+        tr = train_sequence_epoch(
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            device,
+            ignore_index=ignore_index,
+            progress_interval=progress_interval,
+            progress_prefix="train",
+        )
+        va = evaluate_sequence(
+            model,
+            val_loader,
+            criterion,
+            device,
+            ignore_index=ignore_index,
+            progress_interval=progress_interval,
+            progress_prefix="val",
+        )
 
         train_losses.append(tr["loss"])
         val_losses.append(va["loss"])
@@ -241,12 +297,11 @@ def train_sequence(
         else:
             no_improve += 1
 
-        if (epoch + 1) % 5 == 0 or epoch == 0:
-            print(
-                f"Epoch {epoch+1:3d}/{num_epochs}  "
-                f"train_loss={tr['loss']:.4f}  train_acc={tr['accuracy']:.3f}  "
-                f"val_loss={va['loss']:.4f}  val_acc={va['accuracy']:.3f}"
-            )
+        print(
+            f"Epoch {epoch+1:3d}/{num_epochs}  "
+            f"train_loss={tr['loss']:.4f}  train_acc={tr['accuracy']:.3f}  "
+            f"val_loss={va['loss']:.4f}  val_acc={va['accuracy']:.3f}"
+        )
 
         if no_improve >= patience:
             print(f"Early stopping at epoch {epoch+1} (best epoch {best_epoch+1})")

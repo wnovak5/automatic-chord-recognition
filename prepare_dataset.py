@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -64,9 +65,19 @@ def main() -> int:
     vocab = ChordVocab.from_default()
 
     rows: list[dict[str, object]] = []
+    started_at = time.time()
+    total_tracks = len(track_ids)
     for index, track_id in enumerate(track_ids, start=1):
         cache_path = track_dir / f"{track_id}.npz"
-        print(f"[{index}/{len(track_ids)}] {track_id}")
+        elapsed = time.time() - started_at
+        avg_seconds = elapsed / max(index - 1, 1)
+        remaining_tracks = total_tracks - index + 1
+        eta_seconds = avg_seconds * remaining_tracks if index > 1 else 0.0
+        percent = (index / total_tracks) * 100 if total_tracks else 100.0
+        print(
+            f"[{index}/{total_tracks}] ({percent:5.1f}%) track={track_id} "
+            f"elapsed={elapsed/60:.1f}m eta={eta_seconds/60:.1f}m"
+        )
 
         if cache_path.exists() and not args.overwrite:
             with np.load(cache_path, allow_pickle=False) as cached:
@@ -127,8 +138,10 @@ def main() -> int:
         ),
         encoding="utf-8",
     )
+    total_elapsed = time.time() - started_at
     print(f"Wrote manifest to {cache_dir / 'manifest.csv'}")
     print(f"Wrote metadata to {cache_dir / 'metadata.json'}")
+    print(f"Finished preprocessing {len(manifest)} tracks in {total_elapsed/60:.1f} minutes")
     return 0
 
 

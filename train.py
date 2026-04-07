@@ -53,6 +53,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-bidirectional", action="store_true", help="Disable bidirectional LSTM layers.")
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--max-cache-tracks", type=int, default=2)
+    parser.add_argument(
+        "--log-every-batches",
+        type=int,
+        default=100,
+        help="Print batch-level progress every N batches during train/validation epochs.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--val-fraction", type=float, default=0.1)
     parser.add_argument("--test-fraction", type=float, default=0.1)
@@ -82,6 +88,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--num-layers must be positive")
     if args.max_cache_tracks <= 0:
         parser.error("--max-cache-tracks must be positive")
+    if args.log_every_batches <= 0:
+        parser.error("--log-every-batches must be positive")
     if not 0.0 < args.val_fraction < 1.0:
         parser.error("--val-fraction must be between 0 and 1")
     if not 0.0 < args.test_fraction < 1.0:
@@ -214,6 +222,9 @@ def main() -> int:
         num_workers=args.num_workers,
         max_cache_tracks=args.max_cache_tracks,
     )
+    print(f"Train batches per epoch: {len(train_loader)}")
+    print(f"Val batches per epoch: {len(val_loader)}")
+    print(f"Test batches: {len(test_loader)}")
 
     model_kwargs = {
         "num_classes": vocab.num_classes,
@@ -240,6 +251,7 @@ def main() -> int:
         lr=args.lr,
         device=device,
         patience=args.patience,
+        progress_interval=args.log_every_batches,
     )
 
     model.load_state_dict(history["best_state_dict"])
