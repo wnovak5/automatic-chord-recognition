@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import threading
-import tkinter as tk
+from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from typing import Any
+
+import pandas as pd
+import streamlit as st
 
 from infer import (
     DEFAULT_CHECKPOINT,
@@ -13,169 +15,175 @@ from infer import (
 )
 
 
-class ChordInferenceApp:
-    def __init__(self, root: tk.Tk) -> None:
-        self.root = root
-        self.root.title("Chord Recognition")
-        self.root.geometry("980x680")
+APP_TMP_DIR = Path("tmp/streamlit")
+UPLOAD_DIR = APP_TMP_DIR / "uploads"
+OUTPUT_DIR = APP_TMP_DIR / "outputs"
 
-        self.audio_path_var = tk.StringVar()
-        self.status_var = tk.StringVar(value="Choose an audio file to begin.")
-        self.output_dir_var = tk.StringVar(value="")
-        self.smoothing_var = tk.IntVar(value=DEFAULT_SMOOTHING_WINDOW)
-        self.min_segment_var = tk.DoubleVar(value=DEFAULT_MIN_SEGMENT_SECONDS)
 
-        self._build_ui()
+def ensure_app_dirs() -> None:
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    def _build_ui(self) -> None:
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(1, weight=1)
 
-        top = ttk.Frame(self.root, padding=16)
-        top.grid(row=0, column=0, sticky="nsew")
-        top.columnconfigure(1, weight=1)
+def timestamp_slug() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
 
-        ttk.Label(top, text="Local Chord Inference", font=("TkDefaultFont", 16, "bold")).grid(
-            row=0, column=0, columnspan=3, sticky="w"
+
+def save_uploaded_audio(uploaded_file: Any) -> Path:
+    ensure_app_dirs()
+    original_name = Path(uploaded_file.name)
+    safe_name = original_name.name.replace(" ", "_")
+    target = UPLOAD_DIR / f"{original_name.stem}-{timestamp_slug()}{original_name.suffix.lower()}"
+    target.write_bytes(uploaded_file.getbuffer())
+    return target
+
+
+def build_output_dir(audio_path: Path) -> Path:
+    return OUTPUT_DIR / audio_path.stem
+
+
+def format_seconds(seconds: float) -> str:
+    total_seconds = int(seconds)
+    minutes, remaining_seconds = divmod(total_seconds, 60)
+    return f"{minutes}:{remaining_seconds:02d}"
+
+
+def build_timeline_text(segment_df: pd.DataFrame) -> str:
+    if segment_df.empty:
+        return "No chord segments produced."
+
+    lines: list[str] = []
+    for row in segment_df.itertuples(index=False):
+        start = format_seconds(float(row.start_time_seconds))
+        end = format_seconds(float(row.end_time_seconds))
+        lines.append(f"{start} - {end}: {row.predicted_label}")
+    return "\n".join(lines)
+
+
+def render_segment_table(segment_df: pd.DataFrame) -> None:
+    if segment_df.empty:
+        st.warning("No chord segments were generated.")
+        return
+
+    display_df = segment_df.copy()
+    for column in ("start_time_seconds", "end_time_seconds", "duration_seconds"):
+        display_df[column] = display_df[column].map(lambda value: round(float(value), 2))
+    display_df = display_df.rename(
+        columns={
+            "start_time_seconds": "Start (s)",
+            "end_time_seconds": "End (s)",
+            "duration_seconds": "Duration (s)",
+            "predicted_label": "Chord",
+        }
+    )
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+
+def run_app() -> None:
+    st.set_page_config(page_title="Chord Recognition", page_icon="🎵", layout="wide")
+
+    st.title("Chord Recognition")
+    st.caption("Upload a song, run the pretrained LSTM locally, and inspect the chord timeline.")
+
+    with st.sidebar:
+        st.subheader("Inference Settings")
+        smoothing_window = st.slider(
+            "Smoothing Window",
+            min_value=1,
+            max_value=31,
+            step=2,
+            value=DEFAULT_SMOOTHING_WINDOW,
+            help="Odd-number majority-vote window over neighboring frames.",
         )
-        ttk.Label(
-            top,
-            text="Upload a song, run the pretrained LSTM locally, and inspect the merged chord timeline.",
-        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 12))
-
-        ttk.Label(top, text="Audio File").grid(row=2, column=0, sticky="w")
-        ttk.Entry(top, textvariable=self.audio_path_var).grid(row=2, column=1, sticky="ew", padx=(8, 8))
-        ttk.Button(top, text="Browse", command=self._browse_audio).grid(row=2, column=2, sticky="ew")
-
-        ttk.Label(top, text="Smoothing Window").grid(row=3, column=0, sticky="w", pady=(10, 0))
-        ttk.Spinbox(top, from_=1, to=51, increment=2, textvariable=self.smoothing_var, width=10).grid(
-            row=3, column=1, sticky="w", padx=(8, 8), pady=(10, 0)
+        min_segment_seconds = st.slider(
+            "Minimum Segment Length (seconds)",
+            min_value=0.0,
+            max_value=2.0,
+            step=0.05,
+            value=float(DEFAULT_MIN_SEGMENT_SECONDS),
+            help="Very short segments are merged into adjacent chords.",
+        )
+        st.markdown(
+            "This app uses the committed checkpoint at "
+            f"`{DEFAULT_CHECKPOINT}` and runs locally on your machine."
         )
 
-        ttk.Label(top, text="Min Segment Seconds").grid(row=4, column=0, sticky="w", pady=(10, 0))
-        ttk.Spinbox(top, from_=0.0, to=10.0, increment=0.05, textvariable=self.min_segment_var, width=10).grid(
-            row=4, column=1, sticky="w", padx=(8, 8), pady=(10, 0)
-        )
+    uploaded_file = st.file_uploader(
+        "Audio File",
+        type=["mp3", "wav", "flac", "ogg", "m4a"],
+        help="Supported formats depend on the local librosa/audio backend.",
+    )
 
-        self.run_button = ttk.Button(top, text="Run Inference", command=self._run_inference)
-        self.run_button.grid(row=5, column=0, pady=(14, 0), sticky="w")
+    if uploaded_file is not None:
+        st.audio(uploaded_file, format=uploaded_file.type or "audio/mpeg")
 
-        ttk.Label(top, textvariable=self.status_var, foreground="#1f3a5f").grid(
-            row=5, column=1, columnspan=2, sticky="w", padx=(12, 0), pady=(14, 0)
-        )
-
-        middle = ttk.Frame(self.root, padding=(16, 0, 16, 16))
-        middle.grid(row=1, column=0, sticky="nsew")
-        middle.columnconfigure(0, weight=1)
-        middle.rowconfigure(1, weight=1)
-
-        ttk.Label(middle, text="Predicted Chord Segments", font=("TkDefaultFont", 12, "bold")).grid(
-            row=0, column=0, sticky="w"
-        )
-
-        columns = ("start", "end", "duration", "label")
-        self.tree = ttk.Treeview(middle, columns=columns, show="headings", height=18)
-        self.tree.heading("start", text="Start (s)")
-        self.tree.heading("end", text="End (s)")
-        self.tree.heading("duration", text="Duration (s)")
-        self.tree.heading("label", text="Chord")
-        self.tree.column("start", width=120, anchor="center")
-        self.tree.column("end", width=120, anchor="center")
-        self.tree.column("duration", width=120, anchor="center")
-        self.tree.column("label", width=180, anchor="center")
-        self.tree.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
-
-        scrollbar = ttk.Scrollbar(middle, orient="vertical", command=self.tree.yview)
-        scrollbar.grid(row=1, column=1, sticky="ns", pady=(8, 0))
-        self.tree.configure(yscrollcommand=scrollbar.set)
-
-        bottom = ttk.Frame(self.root, padding=(16, 0, 16, 16))
-        bottom.grid(row=2, column=0, sticky="ew")
-        bottom.columnconfigure(1, weight=1)
-
-        ttk.Label(bottom, text="Saved Output Folder").grid(row=0, column=0, sticky="w")
-        ttk.Entry(bottom, textvariable=self.output_dir_var, state="readonly").grid(
-            row=0, column=1, sticky="ew", padx=(8, 0)
-        )
-
-    def _browse_audio(self) -> None:
-        filename = filedialog.askopenfilename(
-            title="Select audio file",
-            filetypes=[
-                ("Audio files", "*.mp3 *.wav *.flac *.ogg *.m4a"),
-                ("All files", "*.*"),
-            ],
-        )
-        if filename:
-            self.audio_path_var.set(filename)
-
-    def _set_running(self, running: bool) -> None:
-        state = "disabled" if running else "normal"
-        self.run_button.configure(state=state)
-
-    def _run_inference(self) -> None:
-        audio_path = self.audio_path_var.get().strip()
-        if not audio_path:
-            messagebox.showerror("Missing file", "Choose an audio file first.")
+    if st.button("Run Inference", type="primary", use_container_width=True, disabled=uploaded_file is None):
+        if uploaded_file is None:
+            st.error("Choose an audio file first.")
             return
 
-        self._set_running(True)
-        self.status_var.set("Running inference...")
-        thread = threading.Thread(target=self._run_inference_worker, args=(audio_path,), daemon=True)
-        thread.start()
-
-    def _run_inference_worker(self, audio_path: str) -> None:
-        try:
+        audio_path = save_uploaded_audio(uploaded_file)
+        with st.spinner("Running inference..."):
             result = run_inference(
-                audio_path=Path(audio_path),
+                audio_path=audio_path,
                 checkpoint_path=DEFAULT_CHECKPOINT,
+                output_dir=build_output_dir(audio_path),
                 device_name="auto",
-                smoothing_window=int(self.smoothing_var.get()),
-                min_segment_seconds=float(self.min_segment_var.get()),
+                smoothing_window=smoothing_window,
+                min_segment_seconds=min_segment_seconds,
             )
-        except Exception as exc:  # noqa: BLE001
-            self.root.after(0, lambda: self._handle_error(str(exc)))
-            return
+        st.session_state["latest_result"] = result
 
-        self.root.after(0, lambda: self._handle_success(result))
+    result = st.session_state.get("latest_result")
+    if result is None:
+        st.info("Upload a file and run inference to see chord predictions.")
+        return
 
-    def _handle_success(self, result: dict[str, object]) -> None:
-        self._set_running(False)
-        self.status_var.set(f"Done on {result['device']}.")
-        self.output_dir_var.set(str(result["output_dir"]))
-        self._populate_segments(result["segment_df"])
+    segment_df = result["segment_df"]
+    frame_df = result["frame_df"]
+    raw_frame_df = result["raw_frame_df"]
 
-    def _handle_error(self, error_message: str) -> None:
-        self._set_running(False)
-        self.status_var.set("Inference failed.")
-        messagebox.showerror("Inference failed", error_message)
+    summary_columns = st.columns(4)
+    summary_columns[0].metric("Device", str(result["device"]).upper())
+    summary_columns[1].metric("Segments", int(len(segment_df)))
+    summary_columns[2].metric("Smoothed Frames", int(len(frame_df)))
+    summary_columns[3].metric("Output Folder", str(result["output_dir"]))
 
-    def _populate_segments(self, segment_df: object) -> None:
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+    st.subheader("Chord Timeline")
+    st.code(build_timeline_text(segment_df), language="text")
 
-        for row in segment_df.itertuples(index=False):
-            self.tree.insert(
-                "",
-                "end",
-                values=(
-                    f"{float(row.start_time_seconds):.2f}",
-                    f"{float(row.end_time_seconds):.2f}",
-                    f"{float(row.duration_seconds):.2f}",
-                    str(row.predicted_label),
-                ),
-            )
+    st.subheader("Merged Chord Segments")
+    render_segment_table(segment_df)
 
+    download_columns = st.columns(3)
+    download_columns[0].download_button(
+        "Download Chord Segments CSV",
+        data=segment_df.to_csv(index=False).encode("utf-8"),
+        file_name="chord_segments.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    download_columns[1].download_button(
+        "Download Smoothed Frames CSV",
+        data=frame_df.to_csv(index=False).encode("utf-8"),
+        file_name="frame_predictions.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    download_columns[2].download_button(
+        "Download Raw Frames CSV",
+        data=raw_frame_df.to_csv(index=False).encode("utf-8"),
+        file_name="raw_frame_predictions.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
 
-def main() -> int:
-    root = tk.Tk()
-    style = ttk.Style(root)
-    if "clam" in style.theme_names():
-        style.theme_use("clam")
-    app = ChordInferenceApp(root)
-    root.mainloop()
-    return 0
+    with st.expander("Frame-Level Predictions"):
+        display_frame_df = frame_df.copy()
+        for column in ("start_time_seconds", "end_time_seconds"):
+            display_frame_df[column] = display_frame_df[column].map(lambda value: round(float(value), 2))
+        st.dataframe(display_frame_df, use_container_width=True, hide_index=True)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run_app()

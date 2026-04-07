@@ -304,22 +304,24 @@ Postprocessing controls:
 
 For now, the most practical output is `chord_segments.csv`. This model predicts only the current 25-class vocabulary of major, minor, and `N.C.` labels.
 
-## Desktop App
+## Local App
 
-There is also a simple local GUI for teammates who do not want to use the command line:
+There is also a simple localhost web app for teammates who do not want to use the command line:
 
 ```bash
-.venv/bin/python app.py
+.venv/bin/streamlit run app.py
 ```
 
-The desktop app:
+The Streamlit app:
 
-- lets the user choose an audio file from disk
+- lets the user upload an audio file from the browser
+- plays the uploaded audio in the page
 - runs the same pretrained inference pipeline used by `infer.py`
-- displays the merged chord timeline on screen
-- saves the CSV outputs under the default `inference/<audio-stem>/` folder
+- displays the merged chord timeline and chord table on screen
+- offers CSV downloads for merged segments and frame-level predictions
+- saves temporary uploaded files and outputs under `tmp/streamlit/`
 
-This first version is a local `tkinter` desktop app, so it should be run on a machine with a graphical desktop session. It is intended as a simple front end for iteration, not a production deployment target.
+By default Streamlit serves the app on localhost and prints the local URL in the terminal. This first version is meant for fast iteration and can be replaced later with a more custom frontend if needed.
 
 ## Notes
 
