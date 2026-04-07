@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import base64
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from infer import (
     DEFAULT_CHECKPOINT,
@@ -58,6 +61,213 @@ def build_timeline_text(segment_df: pd.DataFrame) -> str:
         end = format_seconds(float(row.end_time_seconds))
         lines.append(f"{start} - {end}: {row.predicted_label}")
     return "\n".join(lines)
+
+
+def build_playalong_component(audio_bytes: bytes, audio_mime: str, segment_df: pd.DataFrame) -> str:
+    encoded_audio = base64.b64encode(audio_bytes).decode("ascii")
+    segment_records = [
+        {
+            "start": float(row.start_time_seconds),
+            "end": float(row.end_time_seconds),
+            "duration": float(row.duration_seconds),
+            "label": str(row.predicted_label),
+        }
+        for row in segment_df.itertuples(index=False)
+    ]
+    segment_json = json.dumps(segment_records)
+    audio_src = f"data:{audio_mime};base64,{encoded_audio}"
+
+    return f"""
+<div id="playalong-app" style="font-family: Georgia, 'Times New Roman', serif; color: #1d293d;">
+  <style>
+    #playalong-app {{
+      background: linear-gradient(135deg, #f6efe2 0%, #fdf8ef 100%);
+      border: 1px solid #d8c9a8;
+      border-radius: 18px;
+      padding: 18px;
+    }}
+    #playalong-app .hero {{
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 16px;
+      align-items: stretch;
+      margin-top: 14px;
+    }}
+    #playalong-app .card {{
+      background: rgba(255,255,255,0.75);
+      border: 1px solid #e6dbc3;
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: 0 6px 24px rgba(69, 46, 7, 0.08);
+    }}
+    #playalong-app .eyebrow {{
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 12px;
+      color: #7b6640;
+      margin-bottom: 8px;
+    }}
+    #playalong-app .current-chord {{
+      font-size: 52px;
+      line-height: 1;
+      font-weight: 700;
+      color: #7a2e1f;
+      margin-bottom: 10px;
+    }}
+    #playalong-app .next-chord {{
+      font-size: 28px;
+      font-weight: 600;
+      color: #214e62;
+      margin-bottom: 12px;
+    }}
+    #playalong-app .meta {{
+      font-size: 15px;
+      color: #4c5a67;
+    }}
+    #playalong-app .lane {{
+      display: flex;
+      gap: 10px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+      margin-top: 14px;
+    }}
+    #playalong-app .segment {{
+      min-width: 140px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid #d8c9a8;
+      background: #fffdfa;
+      transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+    }}
+    #playalong-app .segment.active {{
+      background: #7a2e1f;
+      color: #fff6ea;
+      border-color: #7a2e1f;
+      transform: translateY(-2px);
+    }}
+    #playalong-app .segment.upcoming {{
+      background: #dff1f5;
+      border-color: #78aeb9;
+    }}
+    #playalong-app .segment-label {{
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }}
+    #playalong-app .segment-time {{
+      font-size: 13px;
+      opacity: 0.85;
+    }}
+    #playalong-app audio {{
+      width: 100%;
+      margin-top: 6px;
+    }}
+    @media (max-width: 700px) {{
+      #playalong-app .hero {{
+        grid-template-columns: 1fr;
+      }}
+      #playalong-app .current-chord {{
+        font-size: 40px;
+      }}
+    }}
+  </style>
+
+  <div class="eyebrow">Play-Along Prototype</div>
+  <audio id="audio" controls preload="metadata" src="{audio_src}"></audio>
+
+  <div class="hero">
+    <div class="card">
+      <div class="eyebrow">Current Chord</div>
+      <div id="currentChord" class="current-chord">Press play</div>
+      <div id="nextChord" class="next-chord">Next: -</div>
+      <div id="timeMeta" class="meta">Current time: 0:00</div>
+    </div>
+    <div class="card">
+      <div class="eyebrow">What This Does</div>
+      <div class="meta">
+        This prototype tracks the browser audio time and highlights the current chord segment.
+        Use it as a play-along guide rather than a perfectly precise score follower.
+      </div>
+    </div>
+  </div>
+
+  <div id="lane" class="lane"></div>
+
+  <script>
+    const segments = {segment_json};
+    const audio = document.getElementById("audio");
+    const currentChord = document.getElementById("currentChord");
+    const nextChord = document.getElementById("nextChord");
+    const timeMeta = document.getElementById("timeMeta");
+    const lane = document.getElementById("lane");
+
+    function formatSeconds(seconds) {{
+      const total = Math.max(0, Math.floor(seconds));
+      const minutes = Math.floor(total / 60);
+      const rem = total % 60;
+      return `${{minutes}}:${{String(rem).padStart(2, "0")}}`;
+    }}
+
+    segments.forEach((segment, index) => {{
+      const el = document.createElement("div");
+      el.className = "segment";
+      el.dataset.index = String(index);
+      el.innerHTML = `
+        <div class="segment-label">${{segment.label}}</div>
+        <div class="segment-time">${{formatSeconds(segment.start)}} - ${{formatSeconds(segment.end)}}</div>
+      `;
+      lane.appendChild(el);
+    }});
+
+    function updateView() {{
+      const t = audio.currentTime || 0;
+      let activeIndex = -1;
+
+      for (let i = 0; i < segments.length; i += 1) {{
+        const seg = segments[i];
+        if (t >= seg.start && t < seg.end) {{
+          activeIndex = i;
+          break;
+        }}
+      }}
+
+      if (activeIndex === -1 && segments.length > 0 && t >= segments[segments.length - 1].end) {{
+        activeIndex = segments.length - 1;
+      }}
+
+      const active = activeIndex >= 0 ? segments[activeIndex] : null;
+      const upcoming = activeIndex >= 0 && activeIndex + 1 < segments.length ? segments[activeIndex + 1] : null;
+
+      currentChord.textContent = active ? active.label : "Press play";
+      nextChord.textContent = upcoming ? `Next: ${{upcoming.label}}` : "Next: -";
+      if (active) {{
+        const remaining = Math.max(0, active.end - t);
+        timeMeta.textContent = `Current time: ${{formatSeconds(t)}} | change in ~${{remaining.toFixed(1)}}s`;
+      }} else {{
+        timeMeta.textContent = `Current time: ${{formatSeconds(t)}}`;
+      }}
+
+      [...lane.children].forEach((child, index) => {{
+        child.classList.toggle("active", index === activeIndex);
+        child.classList.toggle("upcoming", index === activeIndex + 1);
+      }});
+
+      if (activeIndex >= 0) {{
+        const activeEl = lane.children[activeIndex];
+        if (activeEl) {{
+          activeEl.scrollIntoView({{behavior: "smooth", block: "nearest", inline: "center"}});
+        }}
+      }}
+    }}
+
+    audio.addEventListener("timeupdate", updateView);
+    audio.addEventListener("seeked", updateView);
+    audio.addEventListener("play", updateView);
+    audio.addEventListener("pause", updateView);
+    updateView();
+  </script>
+</div>
+"""
 
 
 def render_segment_table(segment_df: pd.DataFrame) -> None:
@@ -138,6 +348,18 @@ def run_app() -> None:
     if result is None:
         st.info("Upload a file and run inference to see chord predictions.")
         return
+
+    if uploaded_file is not None:
+        st.subheader("Play-Along Prototype")
+        components.html(
+            build_playalong_component(
+                audio_bytes=uploaded_file.getvalue(),
+                audio_mime=uploaded_file.type or "audio/mpeg",
+                segment_df=result["segment_df"],
+            ),
+            height=520,
+            scrolling=False,
+        )
 
     segment_df = result["segment_df"]
     frame_df = result["frame_df"]
