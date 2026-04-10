@@ -2,31 +2,48 @@
 
 Contributors: Edward Anderson, Sam Kunitz-Levy, Will Novak
 
-This repository trains a chord-recognition model on the AAM dataset. The current production workflow is:
+This repository contains the production path for the current automatic chord recognition system:
 
-1. download the raw AAM data
-2. preprocess it into a cached feature dataset
-3. train an LSTM from that cache
-4. save a checkpoint and evaluation artifacts for local use or repository distribution later
+1. download the AAM dataset subset needed for training
+2. preprocess each song into cached chroma features plus frame-aligned labels
+3. train a bidirectional LSTM on those cached sequences
+4. save a deployable checkpoint and evaluation artifacts
+5. run inference from the committed checkpoint
+6. serve the same inference pipeline through a local Streamlit UI
 
-## Pipeline
+## End-to-End Pipeline
 
-The current data path is:
+The shipped workflow is:
 
-`AAM mix audio + beat annotations -> chroma features + frame labels -> cached per-track files -> LSTM training -> checkpoint + plots`
+`AAM mix audio + beat annotations -> chroma features + frame labels -> cached per-track .npz files -> ChordLSTM training -> checkpoint -> inference smoothing/segment merging -> Streamlit UI`
 
-More concretely:
+## Production Architecture
 
-1. Raw song mixes live under `data/raw/AAM/audio-mixes-mp3/`
-2. Beat-level chord labels live under `data/raw/AAM/annotations/` as `*_beatinfo.arff`
-3. `prepare_dataset.py` loads each track, resamples it to mono `22050 Hz`, computes chroma, aligns labels to frames, and saves one cached file per song
-4. `train.py` trains a `ChordLSTM` from those cached files through a lazy dataset loader
-5. The best checkpoint and evaluation outputs are written to a run directory under `runs/`
-6. The committed inference artifact for teammates lives under `pretrained/`
+The current production model is a framewise chord classifier built with a recurrent neural network:
 
-## What Data Is Actually Needed
+- network type: `ChordLSTM`
+- implementation: [`src/models/rnn.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/src/models/rnn.py)
+- recurrent block: bidirectional LSTM
+- input dimension: `12`
+- hidden dimension: `128`
+- number of LSTM layers: `2`
+- dropout: `0.3`
+- bidirectional: `True` by default
+- output classes: `25`
 
-For the current model, only these AAM components are required:
+The 25-class vocabulary is:
+
+- `N.C.`
+- 12 major chords: `Cmaj` through `Bmaj`
+- 12 minor chords: `Cmin` through `Bmin`
+
+The default production checkpoint bundled in the repo is:
+
+- [`pretrained/best_lstm_checkpoint.pt`](/home/eca4zm/school/ml3/automatic-chord-recognition/pretrained/best_lstm_checkpoint.pt)
+
+## Data Preparation
+
+The production training path uses only:
 
 - `annotations`
 - `audio-mixes`
@@ -37,39 +54,118 @@ The current code does not require:
 - `midis`
 - `info`
 
-The loader supports mix files with `.mp3`, `.flac`, or `.wav` suffixes.
+Raw data layout:
 
-## Important Files
+- mix audio: `data/raw/AAM/audio-mixes-mp3/`
+- beat annotations: `data/raw/AAM/annotations/*_beatinfo.arff`
 
-- `get_data.py`: downloads the minimal AAM subset by default
-- `prepare_dataset.py`: builds the cached per-track feature dataset
-- `train.py`: trains the LSTM and saves artifacts
-- `prepare_dataset.slurm`: Rivanna preprocessing job
-- `train_lstm.slurm`: Rivanna training job
-- `src/data/load_data.py`: raw AAM loading and label alignment
-- `src/data/dataset.py`: lazy cached dataset and dataloaders
-- `src/models/rnn.py`: `ChordLSTM`
-- `src/training/trainer.py`: training loops and checkpoint helpers
-- `src/utils/visualization.py`: plots
+Preparation logic lives in:
 
-## Environment
+- [`prepare_dataset.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/prepare_dataset.py)
+- [`src/data/load_data.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/src/data/load_data.py)
+- [`src/features/chroma.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/src/features/chroma.py)
 
-Dependencies are managed in:
+For each track, preprocessing does the following:
 
-- [pyproject.toml](/home/eca4zm/school/ml3/automatic-chord-recognition/pyproject.toml)
-- [uv.lock](/home/eca4zm/school/ml3/automatic-chord-recognition/uv.lock)
+1. load the song mix with `librosa`
+2. resample to mono at `22050 Hz`
+3. compute `12`-bin `chroma_cqt`
+4. use hop length `512`
+5. compute one timestamp per frame
+6. convert beat-level chord annotations into `[start, end)` intervals
+7. assign one chord label to each feature frame
+8. L2-normalize the chroma
+9. build features with context `0`, so each frame stays a `12`-dimensional vector
+10. save one cached `.npz` file per track
 
-Create the environment with:
+Each cached track file contains:
 
-```bash
-uv sync
-```
+- `features`
+- `labels`
+- `frame_times`
+- `frame_labels`
+- `sample_rate`
+- `hop_length`
 
-If the repo contains `.venv/`, the SLURM scripts will use it automatically.
+Cache outputs:
 
-## Downloading Raw Data
+- `data/processed/aam_lstm_cache/manifest.csv`
+- `data/processed/aam_lstm_cache/metadata.json`
+- `data/processed/aam_lstm_cache/tracks/<track_id>.npz`
 
-By default, `get_data.py` downloads only the training-required AAM subset:
+## Training Pipeline
+
+Training is driven by [`train.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/train.py) and uses the cached dataset implementation in [`src/data/dataset.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/src/data/dataset.py).
+
+### Sequence Setup
+
+Training does not feed full songs as one giant tensor. Instead it:
+
+1. loads cached per-track features lazily from disk
+2. slices each track into sequences of length `128`
+3. pads variable-length final chunks within a batch
+4. uses packed padded sequences inside the LSTM
+5. ignores padded labels with `ignore_index=-100`
+
+### Default Hyperparameters
+
+Current training defaults from [`train.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/train.py):
+
+- epochs: `30`
+- learning rate: `1e-3`
+- early stopping patience: `8`
+- batch size: `32`
+- sequence length: `128`
+- hidden dimension: `128`
+- number of LSTM layers: `2`
+- dropout: `0.3`
+- bidirectional: enabled by default
+- workers: `0` locally
+- max cached tracks held in memory: `2`
+- seed: `42`
+- validation fraction: `0.1`
+- test fraction: `0.1`
+
+### Optimization
+
+Training logic lives in [`src/training/trainer.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/src/training/trainer.py).
+
+The training loop:
+
+- uses `Adam`
+- computes inverse-frequency class weights from the training labels
+- uses weighted `CrossEntropyLoss`
+- tracks train and validation loss and accuracy
+- keeps the best model state by validation loss
+- stops early when validation loss stops improving
+
+### Training Outputs
+
+Each run writes a directory under `runs/` by default:
+
+- `best_lstm_checkpoint.pt`
+- `training_curves.png`
+- `confusion_matrix.png`
+- `confusion_matrix.csv`
+- `per_class_accuracy.csv`
+- `prediction_strip_<track>.png`
+- `prediction_track_<track>.csv`
+- `metrics.json`
+- `splits.json`
+
+The saved checkpoint includes:
+
+- model architecture kwargs
+- model weights
+- vocabulary
+- cache metadata
+- train/val/test splits
+- training history
+- test metrics
+
+## Downloading Data
+
+Download the minimum dataset needed for the production model:
 
 ```bash
 python get_data.py
@@ -83,47 +179,25 @@ python get_data.py --include-multitracks
 python get_data.py --full
 ```
 
-The downloader supports resumable archive downloads when the server allows ranged requests.
+The downloader is implemented in [`get_data.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/get_data.py).
 
 ## Building the Cache
 
-Run once before full training:
+Create the cached training dataset:
 
 ```bash
 python prepare_dataset.py --root data/raw/AAM --cache-dir data/processed/aam_lstm_cache
 ```
 
-This produces:
-
-- `data/processed/aam_lstm_cache/manifest.csv`
-- `data/processed/aam_lstm_cache/metadata.json`
-- `data/processed/aam_lstm_cache/tracks/<track_id>.npz`
-
-Each cached track file contains:
-
-- `features`
-- `labels`
-- `frame_times`
-- `frame_labels`
-- `sample_rate`
-- `hop_length`
-
-`prepare_dataset.py` logs:
-
-- current track id
-- progress through the corpus
-- elapsed time
-- ETA
-
 ## Training
 
-Train locally from the cache:
+Train the production LSTM from the cache:
 
 ```bash
 python train.py --cache-dir data/processed/aam_lstm_cache
 ```
 
-Common options:
+Example with explicit hyperparameters:
 
 ```bash
 python train.py \
@@ -133,25 +207,18 @@ python train.py \
   --sequence-length 128 \
   --hidden-dim 128 \
   --num-layers 2 \
-  --log-every-batches 100
+  --dropout 0.3 \
+  --lr 1e-3
 ```
-
-The training script:
-
-- builds train/val/test splits from cached tracks
-- trains a `ChordLSTM`
-- saves the best checkpoint
-- evaluates on the test split
-- saves plots and CSV summaries
 
 ## Rivanna Workflow
 
-Use two separate jobs:
+The production cluster workflow is:
 
-1. preprocessing job
-2. training job
+1. preprocess on CPU
+2. train on GPU
 
-Submit them in order:
+Submit the jobs in order:
 
 ```bash
 sbatch prepare_dataset.slurm
@@ -165,166 +232,117 @@ PREP_JOB=$(sbatch --parsable prepare_dataset.slurm)
 sbatch --dependency=afterok:$PREP_JOB train_lstm.slurm
 ```
 
-### `prepare_dataset.slurm`
+SLURM entrypoints:
 
-Current resources:
+- [`prepare_dataset.slurm`](/home/eca4zm/school/ml3/automatic-chord-recognition/prepare_dataset.slurm)
+- [`train_lstm.slurm`](/home/eca4zm/school/ml3/automatic-chord-recognition/train_lstm.slurm)
 
-- `--partition=standard`
-- `--cpus-per-task=8`
-- `--mem=32G`
-- `--time=08:00:00`
+## Inference Pipeline
 
-### `train_lstm.slurm`
+Inference is implemented in [`infer.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/infer.py).
 
-Current resources:
-
-- `--partition=gpu`
-- `--gres=gpu:1`
-- `--cpus-per-task=8`
-- `--mem=32G`
-- `--time=08:00:00`
-
-The training job expects the cache manifest to already exist and will fail fast if it does not.
-
-You can pass extra options through `sbatch`:
-
-```bash
-sbatch train_lstm.slurm --epochs 40 --batch-size 64 --sequence-length 256
-```
-
-You can override paths:
-
-```bash
-RAW_ROOT=/path/to/AAM \
-CACHE_DIR=/scratch/$USER/aam_lstm_cache \
-OUTPUT_DIR=/scratch/$USER/lstm_run \
-sbatch train_lstm.slurm --epochs 40
-```
-
-## Outputs
-
-`train.py` writes a run-specific directory under `runs/` by default:
-
-- `runs/lstm-<jobid>/best_lstm_checkpoint.pt`
-- `runs/lstm-<jobid>/training_curves.png`
-- `runs/lstm-<jobid>/confusion_matrix.png`
-- `runs/lstm-<jobid>/confusion_matrix.csv`
-- `runs/lstm-<jobid>/per_class_accuracy.csv`
-- `runs/lstm-<jobid>/prediction_strip_<track>.png`
-- `runs/lstm-<jobid>/prediction_track_<track>.csv`
-- `runs/lstm-<jobid>/metrics.json`
-- `runs/lstm-<jobid>/splits.json`
-
-The checkpoint includes:
-
-- `model_state_dict`
-- model architecture kwargs
-- vocabulary
-- split information
-- training history
-- test metrics
-- cache metadata
-
-The selected inference artifact for this repository is committed at `pretrained/best_lstm_checkpoint.pt`.
-
-## Progress Logging
-
-Long jobs emit useful progress information:
-
-- `prepare_dataset.py`
-  - track index
-  - percentage complete
-  - elapsed time
-  - ETA
-- `train.py` / `trainer.py`
-  - batch-level progress during train and validation
-  - running loss
-  - running accuracy
-  - elapsed time
-  - ETA
-
-Useful monitoring commands:
-
-```bash
-squeue -u $USER
-tail -f slurm-prepare-data-<jobid>.out
-tail -f slurm-train-lstm-<jobid>.out
-```
-
-## Deployment
-
-The intended deployment path is:
-
-1. train on Rivanna
-2. promote the selected checkpoint into `pretrained/`
-3. rebuild the `ChordLSTM` from the saved metadata
-4. load `model_state_dict`
-5. run inference on new songs
-
-Teammates should use `pretrained/best_lstm_checkpoint.pt` for shared inference instead of retraining the model.
-
-## Inference
-
-For local one-song-at-a-time inference, you can run the committed checkpoint directly on CPU:
+Run it with:
 
 ```bash
 .venv/bin/python infer.py --audio path/to/song.mp3 --device cpu
 ```
 
-Supported inputs depend on `librosa`/backend support and typically include formats such as `.mp3`, `.wav`, and `.flac`.
+The production inference path does the following:
 
-By default, `infer.py`:
+1. load the audio file as mono at `22050 Hz`
+2. compute the same `12`-bin chroma features used in training
+3. rebuild `ChordLSTM` from checkpoint metadata
+4. predict one chord per frame
+5. smooth frame labels with majority-vote windowing
+6. merge consecutive equal-label frames into segments
+7. merge very short segments into neighbors for a cleaner chart
 
-- loads audio as mono at `22050 Hz`
-- computes the same chroma features used during training
-- restores `ChordLSTM` from `pretrained/best_lstm_checkpoint.pt`
-- writes outputs under `inference/<audio-stem>/`
+### Default Inference Hyperparameters
+
+Current defaults from [`infer.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/infer.py):
+
+- checkpoint: `pretrained/best_lstm_checkpoint.pt`
+- sample rate: `22050`
+- hop length: `512`
+- context: `0`
+- smoothing window: `9`
+- minimum segment length: `0.35` seconds
 
 Inference outputs:
 
-- `raw_frame_predictions.csv`: unsmoothed frame-by-frame chord labels
-- `frame_predictions.csv`: smoothed frame-by-frame chord labels
-- `chord_segments.csv`: merged chord spans intended to be easier to play from
-- `metadata.json`: checkpoint path and inference settings used
+- `raw_frame_predictions.csv`
+- `frame_predictions.csv`
+- `chord_segments.csv`
+- `metadata.json`
 
-Useful options:
+The most useful final artifact for a person playing along is usually:
 
-```bash
-.venv/bin/python infer.py \
-  --audio path/to/song.wav \
-  --output-dir inference/song_name \
-  --smoothing-window 9 \
-  --min-segment-seconds 0.35
-```
+- `chord_segments.csv`
 
-Postprocessing controls:
+## Final UI
 
-- `--smoothing-window`: odd-number majority-vote window over neighboring frames; larger values reduce flicker
-- `--min-segment-seconds`: merges very short chord segments into adjacent ones to produce a cleaner chord chart
+The final user-facing layer in this repo is the Streamlit app in [`app.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/app.py).
 
-For now, the most practical output is `chord_segments.csv`. This model predicts only the current 25-class vocabulary of major, minor, and `N.C.` labels.
-
-## Local App
-
-There is also a simple localhost web app for teammates who do not want to use the command line:
+Launch it with:
 
 ```bash
 .venv/bin/streamlit run app.py
 ```
 
-The Streamlit app:
+The UI is a local browser app that:
 
-- lets the user upload an audio file from the browser
-- plays the uploaded audio in the page
-- runs the same pretrained inference pipeline used by `infer.py`
-- displays the merged chord timeline and chord table on screen
-- offers CSV downloads for merged segments and frame-level predictions
-- saves temporary uploaded files and outputs under `tmp/streamlit/`
+1. lets the user upload an audio file
+2. previews the uploaded audio in the browser
+3. runs the same pretrained inference pipeline used by `infer.py`
+4. shows a play-along panel with the current chord and next chord
+5. displays a merged chord timeline
+6. displays a table of merged chord segments
+7. lets the user download CSV outputs
 
-By default Streamlit serves the app on localhost and prints the local URL in the terminal. This first version is meant for fast iteration and can be replaced later with a more custom frontend if needed.
+The app exposes two main postprocessing controls in the sidebar:
+
+- smoothing window
+- minimum segment length
+
+Temporary files written by the UI live under:
+
+- `tmp/streamlit/uploads/`
+- `tmp/streamlit/outputs/`
+
+## Environment
+
+Dependencies are declared in:
+
+- [`pyproject.toml`](/home/eca4zm/school/ml3/automatic-chord-recognition/pyproject.toml)
+- [`uv.lock`](/home/eca4zm/school/ml3/automatic-chord-recognition/uv.lock)
+
+Create the environment with:
+
+```bash
+uv sync
+```
+
+If the repo already has `.venv/`, the SLURM scripts will use it automatically.
+
+## Repo Guide
+
+Important production files:
+
+- [`get_data.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/get_data.py)
+- [`prepare_dataset.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/prepare_dataset.py)
+- [`train.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/train.py)
+- [`infer.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/infer.py)
+- [`app.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/app.py)
+- [`src/data/load_data.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/src/data/load_data.py)
+- [`src/data/dataset.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/src/data/dataset.py)
+- [`src/features/chroma.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/src/features/chroma.py)
+- [`src/models/rnn.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/src/models/rnn.py)
+- [`src/training/trainer.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/src/training/trainer.py)
+- [`src/training/metrics.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/src/training/metrics.py)
+- [`src/utils/visualization.py`](/home/eca4zm/school/ml3/automatic-chord-recognition/src/utils/visualization.py)
 
 ## Notes
 
-- The model vocabulary is a 25-class major/minor/no-chord label space
-- Unsupported raw annotation exceptions are normalized to `N.C.`
-- Generated outputs such as ad hoc `runs/`, caches, `tmp/`, inference outputs, and SLURM logs should stay out of git history; `pretrained/` is the intentional exception for the shared inference checkpoint
+- The production path in this repo is the cached-feature LSTM pipeline, not the older experimental preprocessing modules.
+- The shared inference checkpoint in `pretrained/` is intended for teammates who want to run inference without retraining.
+- Generated run directories, caches, local inference outputs, temporary UI outputs, and SLURM logs should stay out of git history unless intentionally promoted.
